@@ -24,8 +24,8 @@ typedef uint16_t uint16;
 typedef uint32_t uint32;
 typedef uint64_t uint64;
 
-typedef float real32;
-typedef double real64;
+typedef float f32;
+typedef double f64;
 
 struct win32_offscreen_buffer {
     // NOTE(joao): Pixels are always 32-bits wide, memory order BB GG RR xx
@@ -42,7 +42,7 @@ struct win32_window_dimensions {
 };
 
 // TODO(joao): global only for now
-global_var bool32 _running;
+global_var bool32 globalRunning;
 global_var win32_offscreen_buffer globalBackBuffer;
 global_var LPDIRECTSOUNDBUFFER globalSoundBuffer;
 
@@ -228,12 +228,12 @@ LRESULT CALLBACK win32MainWindowCallback(HWND window, UINT msg, WPARAM wParam, L
         case WM_DESTROY: {
             // TODO(joao): Handle as an error - possibly recreate window
             OutputDebugStringA("WM_DESTROY\n");
-            _running = false;
+            globalRunning = false;
         } break;
         case WM_CLOSE: {
             // TODO(joao): Handle with message to user
             OutputDebugStringA("WM_CLOSE\n");
-            _running = false;
+            globalRunning = false;
         } break;
         case WM_ACTIVATEAPP: {
             OutputDebugStringA("WM_ACTIVATEAPP\n");
@@ -270,7 +270,7 @@ LRESULT CALLBACK win32MainWindowCallback(HWND window, UINT msg, WPARAM wParam, L
 
             bool32 altKeyIsDown = (lParam & (1 << 29));
             if (altKeyIsDown && (vkCode == VK_F4)) {
-                _running = false;
+                globalRunning = false;
             }
         } break;
             
@@ -304,7 +304,7 @@ struct win32_sound_output {
     int wavePeriod;
     int bytesPerSample;
     int globalBufferSize;
-    real32 tSine;
+    f32 tSine;
     int latencySampleCount;
 };
 
@@ -326,12 +326,12 @@ internal void win32FillSoundBuffer(win32_sound_output *soundOutput, DWORD byteTo
         int16 *sampleOut = (int16 *)region1;
                         
         for (DWORD sampleIndex = 0; sampleIndex < region1SampleCount; ++sampleIndex) {
-            real32 sineValue = sinf(soundOutput->tSine);
+            f32 sineValue = sinf(soundOutput->tSine);
             int16 sampleValue = (int16)(sineValue * soundOutput->toneVolume);
             *sampleOut++ = sampleValue;
             *sampleOut++ = sampleValue;
 
-            soundOutput->tSine += 2.0f * pi32 * 1.0f / (real32)soundOutput->wavePeriod;
+            soundOutput->tSine += (2.0f * pi32 * 1.0f) / (f32)soundOutput->wavePeriod;
             ++soundOutput->runningSampleIndex;
         }
 
@@ -339,12 +339,12 @@ internal void win32FillSoundBuffer(win32_sound_output *soundOutput, DWORD byteTo
         sampleOut = (int16 *)region2;
                         
         for (DWORD sampleIndex = 0; sampleIndex < region2SampleCount; ++sampleIndex) {
-            real32 t = 2.0f * pi32 * (real32)soundOutput->runningSampleIndex / (real32)soundOutput->wavePeriod;
-            real32 sineValue = sinf(t);
+            f32 sineValue = sinf(soundOutput->tSine);
             int16 sampleValue = (int16)(sineValue * soundOutput->toneVolume);
             *sampleOut++ = sampleValue;
             *sampleOut++ = sampleValue;
 
+            soundOutput->tSine += (2.0f * pi32 * 1.0f) / (f32)soundOutput->wavePeriod;
             ++soundOutput->runningSampleIndex;
         }
 
@@ -353,6 +353,10 @@ internal void win32FillSoundBuffer(win32_sound_output *soundOutput, DWORD byteTo
 }
 
 int CALLBACK WinMain(HINSTANCE instance, HINSTANCE prevInstance, LPSTR cmdLine, int showCode){
+    LARGE_INTEGER perfCountFrequencyResult;
+    QueryPerformanceFrequency(&perfCountFrequencyResult);
+    int64 perfCountFrequency = perfCountFrequencyResult.QuadPart;
+    
     win32LoadXInput();
     
     WNDCLASSA windowClass = {};
@@ -364,7 +368,7 @@ int CALLBACK WinMain(HINSTANCE instance, HINSTANCE prevInstance, LPSTR cmdLine, 
     windowClass.hInstance = instance;
 //    WindowClass.hIcon;
     windowClass.lpszClassName = "HorrifieldWindowClass";
-
+    
     if(RegisterClassA(&windowClass)) {
         HWND window = CreateWindowEx(0, //dwExStyle (Extended Window Styles)
                                            windowClass.lpszClassName, //lpClassName
@@ -380,7 +384,6 @@ int CALLBACK WinMain(HINSTANCE instance, HINSTANCE prevInstance, LPSTR cmdLine, 
                                            0); //lpParam
         if (window) {
             HDC deviceContext = GetDC(window);
-            _running = true;
 
             // NOTE(joao): Graphics test variables
             int xOffset = 0;
@@ -395,22 +398,25 @@ int CALLBACK WinMain(HINSTANCE instance, HINSTANCE prevInstance, LPSTR cmdLine, 
             soundOutput.runningSampleIndex = 0;
             soundOutput.wavePeriod = soundOutput.samplesPerSecond / soundOutput.toneHz;
             soundOutput.bytesPerSample = sizeof(int16) * 2;
-            soundOutput.globalBufferSize = soundOutput.samplesPerSecond * soundOutput.bytesPerSample;
+            soundOutput.globalBufferSize = 2 * soundOutput.samplesPerSecond * soundOutput.bytesPerSample;
             soundOutput.latencySampleCount = soundOutput.samplesPerSecond / 15;
             
             win32InitDSound(window, soundOutput.samplesPerSecond, soundOutput.globalBufferSize);
             win32FillSoundBuffer(&soundOutput, 0, soundOutput.latencySampleCount * soundOutput.bytesPerSample);
             globalSoundBuffer->Play(0, 0, DSBPLAY_LOOPING);                    
-            
-            bool32 soundIsPlaying = false;
-            
+                        
+            globalRunning = true;
+
+            LARGE_INTEGER lastCounter;
+            QueryPerformanceCounter(&lastCounter);
+            int64 lastCycleCount = __rdstc();
             // NOTE(joao): Main game loop
-            while (_running) {
+            while (globalRunning) {                                
                 MSG msg;
 
                 { // NOTE(joao): Loop handling messages the system sends to the application
                     while (PeekMessage(&msg, 0, 0, 0, PM_REMOVE)) {
-                        if (msg.message == WM_QUIT) _running = false;
+                        if (msg.message == WM_QUIT) globalRunning = false;
                    
                         TranslateMessage(&msg);
                         DispatchMessageA(&msg);
@@ -440,7 +446,7 @@ int CALLBACK WinMain(HINSTANCE instance, HINSTANCE prevInstance, LPSTR cmdLine, 
 
                             int16 stickLX = pad->sThumbLX;
                             int16 stickLY = pad->sThumbLY;
-
+                            
                             xOffset += stickLX / 4096;
                             yOffset += stickLY / 4096;
                             
@@ -451,19 +457,18 @@ int CALLBACK WinMain(HINSTANCE instance, HINSTANCE prevInstance, LPSTR cmdLine, 
                         }
                     }
                 }
-                
-                renderWeirdGradient(&globalBackBuffer, xOffset, yOffset);
 
+                renderWeirdGradient(&globalBackBuffer, xOffset, yOffset);
+                
                 DWORD playCursor;
                 DWORD writeCursor;
 
                 // NOTE(joao): DirectSound output test
-                if (!soundIsPlaying &&
-                    SUCCEEDED(globalSoundBuffer->GetCurrentPosition(&playCursor, &writeCursor))) {
+                if (SUCCEEDED(globalSoundBuffer->GetCurrentPosition(&playCursor, &writeCursor))) {
                     DWORD byteToLock = (soundOutput.runningSampleIndex * soundOutput.bytesPerSample) % soundOutput.globalBufferSize;
                     DWORD targetCursor =
-                        ((playCursor +
-                          (soundOutput.latencySampleCount * soundOutput.bytesPerSample)) % soundOutput.globalBufferSize);
+                        ((playCursor + (soundOutput.latencySampleCount * soundOutput.bytesPerSample))
+                         % soundOutput.globalBufferSize);
                     DWORD bytesToWrite;
 
                     if (byteToLock > targetCursor) {
@@ -478,6 +483,21 @@ int CALLBACK WinMain(HINSTANCE instance, HINSTANCE prevInstance, LPSTR cmdLine, 
                 
                 win32_window_dimensions dimensions = win32GetWindowDimensions(window);
                 win32DisplayBufferInWindow(&globalBackBuffer, deviceContext, dimensions.width, dimensions.height);
+
+                LARGE_INTEGER endCounter;
+                QueryPerformanceCounter(&endCounter);
+
+                // TODO(joao): Display counter value here
+                int64 counterElapsed  = endCounter.QuadPart - lastCounter.QuadPart;
+                int32 msPerFrame = int32((1000*counterElapsed) / perfCountFrequency);
+                int32 FPS = int32(perfCountFrequency / counterElapsed);
+                
+                char debugBuffer[256];
+                    
+                wsprintf(debugBuffer, "Milliseconds/frame: %dms // %d FPS\n", msPerFrame, FPS);
+                OutputDebugStringA(debugBuffer);
+                
+                lastCounter = endCounter;
             }
         }
         else {
